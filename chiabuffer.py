@@ -11,20 +11,15 @@ import os
 from os import listdir
 from os.path import isfile, join
 
-from concurrent.futures import ThreadPoolExecutor   
-
-ext = "txt"
+ext = "plot"
 minSize = 200
 #find home directory
 user = getpass.getuser()
 
 #be sure to include the trailing / on the directory
 sources = [f'/home/{user}/buffer/']
-destinations = [f'/home/{user}/farm/sea35/'
-                ,f'/home/{user}/farm/sea34/'
-                ,f'/home/{user}/farm/sea33/'
-                ,f'/home/{user}/farm/sea32/'
-                ,f'/home/{user}/farm/sea36/'
+destinations = [
+                 f'/home/{user}/farm/sea36/'
                 ,f'/home/{user}/farm/sea37/' ]
 
 jobs = []
@@ -69,6 +64,7 @@ class JobPool():
 
     def addJob(self, source, dest):
         # only add if we have enough dests to write with
+        # may be unreliable
         if self.size() < self.usable:
             #post job to queue
             self.q.put((source, dest))  
@@ -86,6 +82,7 @@ class JobPool():
         if self.active:
             self.active=False
             print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + '  Waiting..')               
+
             self.q.join()
             print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + '  Joined..')               
     
@@ -121,12 +118,13 @@ in_progress = list()
 once=True
 #keep file count between scans
 file_count = -1
-
+throttle = 0
 def main( pool ):
     global once
     global stopSignal
     global file_count
     global in_progress
+    global throttle
 
     if once:
         once=False
@@ -136,17 +134,21 @@ def main( pool ):
     if stopSignal:
         print('Time to Stop')
         return 
-    
-    #scan our destinations
+
+
+    #fix this, awful hack to do this twice
     for dest in destinations:
         total, used, free = shutil.disk_usage(dest)
         #only add det if it has enough space. 
-        #and only one job per destination at a time
-        if (free // (2 ** 30)) > minSize and dest not in jobs:
-                jobs.append(dest)
-                
+        if (free // (2 ** 30)) > minSize :
+            jobs.append(dest)
+
     pool.setUsable(len(jobs))
-    print('Available Destinations: %s ' % jobs)
+
+    if throttle % 20 == 0:
+        print('Available Destinations: %s ' % jobs)
+
+    throttle = throttle + 1
     #print('Jobs running %s' % pool.size())
 
     #scan sources, create file list 
@@ -181,14 +183,31 @@ if __name__ == "__main__":
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
 
-    pool = JobPool( len(destinations) )
+    job_predict = []
 
-    print('Started Buffer Process: ' + current_time,'  Num parallel: '+ str(len(destinations)))
+    #fix this, awful hack to do this twice
+    for dest in destinations:
+        total, used, free = shutil.disk_usage(dest)
+        #only add det if it has enough space. 
+        if (free // (2 ** 30)) > minSize :
+            print( f'appending dest = {dest}')
+            job_predict.append(dest)
+
+    size = len(job_predict)
+    
+    pool = JobPool( size )
+    print( size )
+
+    print('Started Buffer Process: ' + current_time,'  Num parallel: '+ str(size))
     print('Press Ctrl+C To exit, File currently in process will complete before exit.')
+
+    #sys.exit(0)
+
     #loop so i dont have to do this manually 
     while True:
         if not stopSignal: 
             main(pool)
+            
             #30 second update, with 5 second ctrl-c catching
             for i in range(6):
                 if stopSignal:

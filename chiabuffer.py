@@ -18,19 +18,19 @@ user = getpass.getuser()
 
 #be sure to include the trailing / on the directory
 sources = [f'/home/{user}/buffer/']
-destinations = [f'/home/{user}/farm/sea35/']
+destinations = [f'/home/{user}/farm/sea35/'
+                ,f'/home/{user}/farm/sea36/' ]
 
 jobs = []
+
 
 stopSignal=False
 executor = None
 
+#verbosity
 v = False
 
-
-
-
-def copy_one_plot ( num, source, dest ) :
+def copy_one_plot ( source, dest, num=99 ) :
     # next lets scan the name, rename to plot.2.tmp, copy, and rename again 
     tmp_ext = '.x.tmp' 
     
@@ -51,16 +51,18 @@ def copy_one_plot ( num, source, dest ) :
 
 class JobPool():
     def __init__(self, number_of_workers):
-        
+        self.in_progress = []   #list of dest in copy
         self.q = queue.Queue(number_of_workers)
         self.active = True
         for i in range(number_of_workers):
             threading.Thread(target=self.worker, daemon=True, args=(i,) ).start()
 
     def addJob(self, source, dest):
+        #one dest folder per job
         print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + ' ' + source + ':  started successfully')   
-        if self.active:
-            self.q.put((source, dest))
+        #post job to queue
+        self.q.put((source, dest))  
+
     def getCount():
         return self.q.getCount()
     def getSize():
@@ -74,12 +76,15 @@ class JobPool():
     
     def worker(self, number ):
         while self.active:
-            print(f'Thread {number} . started')
+            #print(f'Thread {number} . started')
             if self.active:
+                #pull from queue, run next job
                 source, dest = self.q.get()
+                self.in_progress.append(source)
                 print(f'[{number}] Started {source} -> {dest} ')
                 #time.sleep(5)
-                copy_one_plot(number,source, dest)
+                copy_one_plot(source, dest,number)
+                self.in_progress.remove(source)
                 print(f'[{number}] Finished {source} ->  {dest}')
                 self.q.task_done()
                 
@@ -134,18 +139,17 @@ def main( pool ):
     #scan our destinations
     for dest in destinations:
         total, used, free = shutil.disk_usage(dest)
-        #only add det if it has enough space
-        if (free // (2 ** 30)) > minSize:
+        #only add det if it has enough space. 
+        #and only one job per destination at a time
+        if (free // (2 ** 30)) > minSize and dest not in jobs:
                 jobs.append(dest)
     
-
-    print('scanning dests : %s ' % jobs)
+    print('Available Destinations: %s ' % jobs)
+    
     
 
     #scan sources, create file list 
     for source in sources:
-
-        
         for filename in glob.glob(source + "*." + ext):
             if stopSignal:
                 pass
@@ -159,8 +163,6 @@ def main( pool ):
                 if filename not in in_progress:
                     print('spawning move %s : %s ' % (filename , destfilename) )
                     pool.addJob( filename, destfilename)                
-                    in_progress.append(destfilename)
-                
 
             # For other errors
             except (shutil.Error ):
@@ -171,22 +173,15 @@ def main( pool ):
 
 if __name__ == "__main__":
 
-    print(f"Arguments count: {len(sys.argv)}")
-    for i, arg in enumerate(sys.argv):
-        print(f"Argument {i:>6}: {arg}")
-    
-    
-    pool_size = 3
-
     original_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, exit_gracefully)    
     
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
 
-    pool = JobPool(pool_size)
+    pool = JobPool( len(destinations) )
 
-    print('Started Buffer Process: ' + current_time)
+    print('Started Buffer Process: ' + current_time,'   '+ str(len(destinations)))
     print('Press Ctrl+C To exit, File currently in process will complete before exit.')
     display_time = WaitTimeIndicator()
     display_time.start()

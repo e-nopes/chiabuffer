@@ -1,11 +1,17 @@
 # chiabuffer
+
+Will spawn as many threads as you have destination disks, copies files to each destination in parallel
+
 Python script to monitor a Buffer drive and move plots to a dest drive. Will not include destination drives with less than `minSize` amount.
+
 Usage:
 
-`python3 buffer.py`
-  
+`python3 chiabuffer.py
+
+
 
 Settings to edit:
+
 
 ext = "plot" # extension we are looking for (you can test usuing .txt files, etc)
 

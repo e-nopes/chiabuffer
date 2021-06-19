@@ -1,107 +1,101 @@
 #!/usr/bin/env python3
 import signal
+import getpass
 import sys
 import shutil
 import glob
 from datetime import datetime
 import time
-import threading
-import multiprocessing as mp
+import threading, queue
+import os
 
+from concurrent.futures import ThreadPoolExecutor   
 
 ext = "txt"
 minSize = 200
+#find home directory
+user = getpass.getuser()
 
 #be sure to include the trailing / on the directory
-sources = ['/home/nopes/buffer/']
-destinations = ['/home/nopes/farm/sea35/']
+sources = [f'/home/{user}/buffer/']
+destinations = [f'/home/{user}/farm/sea35/']
 
 jobs = []
 
 stopSignal=False
+executor = None
 
-'''
-class Dest( ) :
-    __init__ ( self, dest ):
-        self.location = dest
-        self.spaceRemain = 0
+v = False
 
-class Host:
-    __init__ ( self, loc ):
-        self.location = loc
-        #self.spaceFull 
 
-class Job ( self, source, dest ) :
-    __init__:
-        self.name = ''
-        host = Host( source, dest);
-    def run:
-        shutil.move(filename,destfilename )
-        print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + ' ' + file + ':  copied successfully')
-'''
+
+
+def copy_one_plot ( num, source, dest ) :
+    # next lets scan the name, rename to plot.2.tmp, copy, and rename again 
+    tmp_ext = '.x.tmp' 
+    
+    try:     
+        filename = os.path.basename(source)
+        destfilename = dest+filename
+        if v: print (f'[{num}] mv {source} -> {source+tmp_ext} ')
+        shutil.move(source, source+tmp_ext )
+        if v: print (f'[{num}] mv {source+tmp_ext} -> {destfilename+tmp_ext} ')
+        shutil.move(source+tmp_ext, destfilename+tmp_ext)
+        if v: print (f'[{num}] mv {destfilename+tmp_ext} -> {destfilename} ')        
+        shutil.move(destfilename+tmp_ext, destfilename)
+        if v: print (f'[{num}] mv {dest} -> {dest} done')        
+
+    except Exception as e: 
+        print(e)
+
+
+class JobPool():
+    def __init__(self, number_of_workers):
+        
+        self.q = queue.Queue(number_of_workers)
+        self.active = True
+        for i in range(number_of_workers):
+            threading.Thread(target=self.worker, daemon=True, args=(i,) ).start()
+
+    def addJob(self, source, dest):
+        print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + ' ' + source + ':  started successfully')   
+        if self.active:
+            self.q.put((source, dest))
+    def getCount():
+        return self.q.getCount()
+    def getSize():
+        return self.q.getSize()
+
+    def stop(self):
+        if self.active:
+            self.active=False
+            print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + '  Waiting..')               
+            return self.q.join()
+    
+    def worker(self, number ):
+        while self.active:
+            print(f'Thread {number} . started')
+            if self.active:
+                source, dest = self.q.get()
+                print(f'[{number}] Started {source} -> {dest} ')
+                #time.sleep(5)
+                copy_one_plot(number,source, dest)
+                print(f'[{number}] Finished {source} ->  {dest}')
+                self.q.task_done()
+                
 
 class WaitTimeIndicator:
     def __init__(self):
         self.init_time = time.clock_gettime(time.CLOCK_MONOTONIC)
 
     def start(self):
-        print( '\n Waited %d seconds' % (time.clock_gettime(time.CLOCK_MONOTONIC) - self.init_time) )
+        self.init_time = time.clock_gettime(time.CLOCK_MONOTONIC)
     
     def tick(self):
         print( '\r Waited %d seconds' % (time.clock_gettime(time.CLOCK_MONOTONIC) - self.init_time) )
 
-    def stop(self):
-        self.init_time = time.clock_gettime(CLOCK_MONOTONIC)
 
-
-def double_move_file( source, dest ) :
-    # next lets scan the name, rename to plot.2.tmp, copy, and rename again 
-    #dest_filename =  dest )]
-    tmp_ext = '.chia2.tmp' 
-     
-    shutil.move(source, source+tmp_ext )
-    shutil.copy(source+tmp_ext, dest+tmp_ext)
-    shutil.move(dest+tmp_ext, dest)
-
-
-def copy_one_plot ( source, dest ) :
-    # next lets scan the name, rename to plot.2.tmp, copy, and rename again 
-    tmp_ext = '.chia.tmp' 
-    
-    try:     
-        shutil.move(source, source+tmp_ext )
-        shutil.copy(source+tmp_ext, dest+tmp_ext)
-        shutil.move(dest+tmp_ext, dest)
-
-    except Exception as e: 
-        print(e)
-
-
-class JobPool:
-    def __init__ (self, number_of_threads):
-        self.threads = []
-        self.max_pool_size = number_of_threads
-        #allocate threads
-        mp.set_start_method('spawn')
-        self.q = mp.Queue()
-        #make our threads iterable
-        threads.insert(self.q)
-
-    def start(self, filename, destfilename):
-        print(' spawning ')
-        self.p = mp.Process(target=copy_one_plot, args=( filename, destfilename ))
-        self.q.start()
-
-    def stop(self):
-        for jobs in self.threads:
-            print(' joining job  ') 
-            jobs.join()
         
-        
-
-
-
-
 
 def exit_gracefully(signum, frame):
     global stopSignal
@@ -115,19 +109,27 @@ def exit_gracefully(signum, frame):
 
     # restore the exit gracefully handler here    
     signal.signal(signal.SIGINT, exit_gracefully)
-
-#thread id identifies join
-threadpool = dict()
-
+from os import listdir
+from os.path import isfile, join
+in_progress = list()
+once=True
 #keep file count between scans
 file_count = -1
 
-def main():
+def main( pool ):
+    global once
     global stopSignal
     global file_count
+    global in_progress
 
-    #signal.signal(signal.SIGINT, signal_handler)
+    if once:
+        once=False
     jobs.clear()
+
+    #no more jobs to be added
+    if stopSignal:
+        print('Time to Stop')
+        return 
     
     #scan our destinations
     for dest in destinations:
@@ -136,45 +138,29 @@ def main():
         if (free // (2 ** 30)) > minSize:
                 jobs.append(dest)
     
-    print('dests : %s ' % jobs)
-    #pool = Thread.Threa()
+
+    print('scanning dests : %s ' % jobs)
     
+
     #scan sources, create file list 
     for source in sources:
+
+        
         for filename in glob.glob(source + "*." + ext):
             if stopSignal:
                 pass
 
             file_count += 1
-            print('starting')
+            print(f'starting {filename}')
             try:
                 destfilename = jobs[file_count % len(jobs)]
-                print('spawning move %s : %s ' % (filename , destfilename) )
-
-                x = threading.Thread(target=copy_one_plot, args=( filename, destfilename ) )
-                x.start()
+                print(destfilename, in_progress)
+                #next time try to scan for currents?
+                if filename not in in_progress:
+                    print('spawning move %s : %s ' % (filename , destfilename) )
+                    pool.addJob( filename, destfilename)                
+                    in_progress.append(destfilename)
                 
-#                shutil.move(filename, destfilename )
-                print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + ' ' + filename + ':  started successfully')
-
-##             # next lets scan the name, rename to plot.2.tmp, copy, and rename again 
-               #shutil.move(filename, ])
-               #print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + ' ' + filename + ':  copied successfully')
-
-                print (' waiting..')
-                x.join()
-                print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + ' ' + filename + ':  copied successfully')
-                print (' joined..')
-
-            # If source and destination are same
-            except shutil.SameFileError:
-                print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + ' ' + filename + ': Source and destination '
-                                                                                   'represents the same file in '
-                                                                                    + (jobs[file_count % len(jobs)]))
-
-            # If there is any permission issue
-            except PermissionError:
-                print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + ' ' + filename + ": Permission denied.")
 
             # For other errors
             except (shutil.Error ):
@@ -189,9 +175,8 @@ if __name__ == "__main__":
     for i, arg in enumerate(sys.argv):
         print(f"Argument {i:>6}: {arg}")
     
-    if sys.argv[1]:
-        print('        \n', sys.argv[1])
-        time_in_secs = int( sys.argv[1] )
+    
+    pool_size = 3
 
     original_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, exit_gracefully)    
@@ -199,19 +184,23 @@ if __name__ == "__main__":
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
 
+    pool = JobPool(pool_size)
+
     print('Started Buffer Process: ' + current_time)
     print('Press Ctrl+C To exit, File currently in process will complete before exit.')
     display_time = WaitTimeIndicator()
     display_time.start()
     #loop so i dont have to do this manually 
     while True:
-        time.sleep(time_in_secs)
+        time.sleep(5)
         # dont slam the disk if we have no files
         display_time.start()
-        display_time.tick()
+
         if not stopSignal: 
-            main()
+            main(pool)
         else:
+            print(' Waiting for Thread pool cleanup')
+            pool.stop()
             sys.exit(0);
 
 

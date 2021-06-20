@@ -20,13 +20,23 @@ user = getpass.getuser()
 sources = [f'/home/{user}/buffer/']
 destinations = [
                  f'/home/{user}/farm/sea36/'
-                ,f'/home/{user}/farm/sea37/' ]
+                ,f'/home/{user}/farm/sea37/'
+                ,f'/home/{user}/farm/sea38/'
+                ,f'/home/{user}/farm/sea39/'
+                 ]
 
 jobs = []
 
 
+
+#globals 
 stopSignal=False
 executor = None
+in_progress = list()
+once=True
+file_count = -1
+throttle = 0
+ctrl_c_press_num = 0
 
 #verbosity
 v = False
@@ -50,9 +60,10 @@ def copy_one_plot ( source, dest, num=99 ) :
         print(e)
 
 
+
 class JobPool():
     def __init__(self, number_of_workers):
-        self.in_progress = []   #list of dest in copy
+        self.in_progress = []   #list of source in copy
         self.usable = number_of_workers
         self.q = queue.Queue(number_of_workers)
         self.active = True
@@ -63,11 +74,8 @@ class JobPool():
         self.usable = num
 
     def addJob(self, source, dest):
-        # only add if we have enough dests to write with
-        # may be unreliable
-        if self.size() < self.usable:
-            #post job to queue
-            self.q.put((source, dest))  
+        #post job to queue
+        self.q.put((source, dest))  
 
     def size(self):
         return self.q.qsize()
@@ -88,43 +96,60 @@ class JobPool():
     
     def worker(self, number ):
         while self.active:
+            #deactivate when requested 
+            if (number >= self.usable):
+                time.sleep(300) #we are expecting a long sleep
+                continue
+
             #print(f'Thread {number} . started')
-            if self.active:
-                #pull from queue, run next job
-                source, dest = self.q.get()
-                self.in_progress.append(source)
-                print( datetime.now().strftime("%m/%d/%Y, %H:%M:%S")  + f' -- [{number}] Started {source} -> {dest} ')
-                copy_one_plot(source, dest,number)
-                self.in_progress.remove(source)
-                print( datetime.now().strftime("%m/%d/%Y, %H:%M:%S")  + f' -- [{number}] Finished {source} -> {dest} ')
-                self.q.task_done()
-                
-        
+            
+            #pull from queue, run next job
+            source, dest = self.q.get()
+            self.in_progress.append(source)
+            print( datetime.now().strftime("%m/%d/%Y, %H:%M:%S")  + f' -- [{number}] Started {source} -> {dest} ')
+            
+            try:
+                copy_one_plot(source, dest, number)
+            except Exception as e: 
+                print(e)
+
+            self.in_progress.remove(source)
+            print( datetime.now().strftime("%m/%d/%Y, %H:%M:%S")  + f' -- [{number}] Finished {source} -> {dest} ')
+            self.q.task_done()
+            
+    
 
 def exit_gracefully(signum, frame):
     global stopSignal
+    global ctrl_c_press_num
     # restore the original signal handler as otherwise evil things will happen
     # in raw_input when CTRL+C is pressed, and our signal handler is not re-entrant
     signal.signal(signal.SIGINT, original_sigint)
+    ctrl_c_press_num=ctrl_c_press_num+1
 
     stopSignal=True
 
-    print(' please wait ')
+    print(' please wait for threads to finish')
 
-    # restore the exit gracefully handler here    
+    if ctrl_c_press_num < 3 :
+        remain = 3 - ctrl_c_press_num
+        print(f' To Exit hit ctrl-c {remain} times. ')
+        #keep our handler
+        signal.signal(signal.SIGINT, exit_gracefully)
+
+    # do not restore the exit gracefully handler here. two cntrl-c will take us out
     #signal.signal(signal.SIGINT, exit_gracefully)
 
-in_progress = list()
-once=True
-#keep file count between scans
-file_count = -1
-throttle = 0
+
+
 def main( pool ):
     global once
     global stopSignal
     global file_count
     global in_progress
     global throttle
+
+    diskUsage = {}
 
     if once:
         once=False
@@ -136,17 +161,28 @@ def main( pool ):
         return 
 
 
+    if throttle % 40 == 0:
+        print(f' -------------------------  ' )
     #fix this, awful hack to do this twice
     for dest in destinations:
         total, used, free = shutil.disk_usage(dest)
         #only add det if it has enough space. 
         if (free // (2 ** 30)) > minSize :
+
+            total = total // (2**30)
+            used =  used  // (2**30)
+            free =  free  // (2**30)
+
+            if throttle % 40 == 0:
+                print(f' Destination : {dest}  Free Space: {free} GB ' )
             jobs.append(dest)
+            #diskUsage.append({dest: (total,used,free)})
 
     pool.setUsable(len(jobs))
 
-    if throttle % 20 == 0:
-        print('Available Destinations: %s ' % jobs)
+#    if throttle % 20 == 0:
+#        print('Available Destinations: %s ' % jobs)
+#        print('Destination : %s %s /%s /%s ' %  )
 
     throttle = throttle + 1
     #print('Jobs running %s' % pool.size())
@@ -175,6 +211,9 @@ def main( pool ):
                 print(e)
 
 
+
+
+
 if __name__ == "__main__":
 
     original_sigint = signal.getsignal(signal.SIGINT)
@@ -190,7 +229,7 @@ if __name__ == "__main__":
         total, used, free = shutil.disk_usage(dest)
         #only add det if it has enough space. 
         if (free // (2 ** 30)) > minSize :
-            print( f'appending dest = {dest}')
+            #print( f'appending dest = {dest}')
             job_predict.append(dest)
 
     size = len(job_predict)
@@ -203,7 +242,6 @@ if __name__ == "__main__":
 
     #sys.exit(0)
 
-    #loop so i dont have to do this manually 
     while True:
         if not stopSignal: 
             main(pool)

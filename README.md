@@ -15,3 +15,14 @@ Settings to edit in .py file:
     destinations = ["/mnt/to/"] # comma separated list of dirs to move plots into (/ at end is needed for linux!)
 
 
+
+Notes:
+    When chia creates plots, it does so as .plot.2.tmp. As a final action the files are 
+    renamed to .plot. 
+    
+    This tool will rename any existing and new .plot files to .plot.x.tmp, move them to one of the destinations, 
+    and rename them .plot
+
+    We scan the directory in sources for 'ext' files , and move files to a group of destinations.
+    the files are more or less randomly thrown into any drive with available space.
+    the intent is to parallelize the distribution, while only doing 1 copy at a time per destination.

@@ -12,24 +12,34 @@ from os import listdir
 from os.path import isfile, join
 
 ext = "plot"
-minSize = 200
+minSize = 120
+
+#override destination count with a constant
+max_concurrent = 3
+
+# hit ctrl-c to stop the process. 3 times to forcibly break the moves.
+
 #find home directory
 user = getpass.getuser()
 
-#only ever tested with 1 source drive.
+#only tested with 1 source drive.
 sources = [f'/home/{user}/buffer/']
 
 #be sure to include the trailing / on the directory
 destinations = [
-                 f'/home/{user}/farm/sea36/'
+                 f'/home/{user}/farm/sea34/'
+                ,f'/home/{user}/farm/sea21/'
+                ,f'/home/{user}/farm/sea10/'
+                ,f'/home/{user}/farm/sea36/'
                 ,f'/home/{user}/farm/sea37/'
                 ,f'/home/{user}/farm/sea38/'
                 ,f'/home/{user}/farm/sea39/'
-                 ]
+                ,f'/home/{user}/farm/sea40/'
+                ,f'/home/{user}/farm/sea41/'
+                ,f'/home/{user}/farm/sea43/'
+                ]
 
 jobs = []
-
-
 
 #globals 
 stopSignal=False
@@ -40,7 +50,7 @@ ctrl_c_press_num = 0
 #verbosity
 v = False
 
-def copy_one_plot ( source, dest, num=99 ) :
+def move_one_plot ( source, dest, num=99 ) :
     # next lets scan the name, rename to plot.x.tmp, move, and rename again 
     tmp_ext = '.x.tmp' 
     
@@ -53,13 +63,14 @@ def copy_one_plot ( source, dest, num=99 ) :
         shutil.move(source+tmp_ext, destfilename+tmp_ext)
         if v: print (f'[{num}] mv {destfilename+tmp_ext} -> {destfilename} ')        
         shutil.move(destfilename+tmp_ext, destfilename)
-        if v: print (f'[{num}] mv {dest} -> {dest} done')        
+        if v: print (f'[{num}] mv {source} -> {dest} done')        
 
     except Exception as e: 
         print(e)
 
 
-
+ #manage our queue and 
+# pool of workers who feed from the queue
 class JobPool():
     def __init__(self, number_of_workers):
         self.usable = number_of_workers
@@ -69,8 +80,13 @@ class JobPool():
         for i in range(number_of_workers):
             threading.Thread(target=self.worker, daemon=True, args=(i,) ).start()
 
+    # set how many of our workers we should use
     def setUsable( self, num ):
-        self.usable = num
+        global max_concurrent
+        if num < max_concurrent:
+            self.usable = num
+        else: 
+            self.usable = max_concurrent
 
     def addJob(self, source, dest):
         #post job to queue
@@ -101,7 +117,7 @@ class JobPool():
             print( datetime.now().strftime("%m/%d/%Y, %H:%M:%S")  + f' -- [{number}] Started {source} -> {dest} ')
             
             try:
-                copy_one_plot(source, dest, number)
+                move_one_plot(source, dest, number)
             except Exception as e: 
                 print(e)
 
@@ -111,12 +127,11 @@ class JobPool():
 def exit_gracefully(signum, frame):
     global stopSignal
     global ctrl_c_press_num
-    # restore the original signal handler as otherwise evil things will happen
-    # in raw_input when CTRL+C is pressed, and our signal handler is not re-entrant
+
     signal.signal(signal.SIGINT, original_sigint)
     ctrl_c_press_num=ctrl_c_press_num+1
-
     stopSignal=True
+
     print(' please wait for threads to finish')
 
     if ctrl_c_press_num < 3 :
@@ -130,6 +145,9 @@ def main( pool ):
     global file_count
     global throttle
 
+    #print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + '  Main..Start')               
+
+
     diskUsage = {}
     jobs.clear()
 
@@ -138,7 +156,8 @@ def main( pool ):
         print('Time to Stop')
         return 
 
-    if throttle % 40 == 0:
+
+    if throttle % 8 == 0:
         print(f' -------------------------  ' )
     #fix this, awful hack to do this twice
     for dest in destinations:
@@ -150,14 +169,13 @@ def main( pool ):
             used =  used  // (2**30)
             free =  free  // (2**30)
 
-            if throttle % 40 == 0:
+            if throttle % 8 == 0:
                 print(f' Destination : {dest}  Free Space: {free} GB ' )
             jobs.append(dest)
-            #diskUsage.append({dest: (total,used,free)})
 
     pool.setUsable(len(jobs))
-
     throttle = throttle + 1
+    
     #scan sources, create file list 
     for source in sources:
         for filename in glob.glob(source + "*." + ext):
@@ -165,15 +183,14 @@ def main( pool ):
                 pass
 
             file_count += 1
-            #print(f'starting {filename}')
             try:
                 destfilename = jobs[file_count % len(jobs)]
                 
                 #no doubles
-                if os.path.dirname not in jobs:
-                    pool.addJob( filename, destfilename)                
-                else:
-                    print('skipped over %s', filename)
+                pool.addJob( filename, destfilename)                
+            
+                #If we spawn too fast, we may add multiples before the job changes the filename
+                time.sleep(1)
 
             # For other errors
             except (shutil.Error ):
@@ -181,25 +198,24 @@ def main( pool ):
             except Exception as e: 
                 print(e)
 
+    #print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + '  Main..End')               
+
 
 
 
 if __name__ == "__main__":
-
+    #take signal handler
     original_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, exit_gracefully)    
     
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
-
     job_predict = []
 
     #fix this, make rough guess on the nubmer of threads we really want
     for dest in destinations:
         total, used, free = shutil.disk_usage(dest)
-        #only add det if it has enough space. 
         if (free // (2 ** 30)) > minSize :
-            #print( f'appending dest = {dest}')
             job_predict.append(dest)
 
     size = len(job_predict)
@@ -217,15 +233,11 @@ if __name__ == "__main__":
             for i in range(6):
                 if stopSignal:
                     continue
-                time.sleep(1)
+                time.sleep(5)
         else:
             print(' Waiting for Thread pool cleanup')
             pool.stop()
             sys.exit(0)
-
-
-
-
 
 
 

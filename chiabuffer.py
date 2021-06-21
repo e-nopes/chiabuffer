@@ -38,7 +38,7 @@ throttle = 0
 ctrl_c_press_num = 0
 
 #verbosity
-v = True
+v = False
 
 def copy_one_plot ( source, dest, num=99 ) :
     # next lets scan the name, rename to plot.x.tmp, move, and rename again 

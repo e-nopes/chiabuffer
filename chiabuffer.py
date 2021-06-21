@@ -16,8 +16,10 @@ minSize = 200
 #find home directory
 user = getpass.getuser()
 
-#be sure to include the trailing / on the directory
+#only ever tested with 1 source drive.
 sources = [f'/home/{user}/buffer/']
+
+#be sure to include the trailing / on the directory
 destinations = [
                  f'/home/{user}/farm/sea36/'
                 ,f'/home/{user}/farm/sea37/'
@@ -31,18 +33,15 @@ jobs = []
 
 #globals 
 stopSignal=False
-executor = None
-in_progress = list()
-once=True
 file_count = -1
 throttle = 0
 ctrl_c_press_num = 0
 
 #verbosity
-v = False
+v = True
 
 def copy_one_plot ( source, dest, num=99 ) :
-    # next lets scan the name, rename to plot.2.tmp, copy, and rename again 
+    # next lets scan the name, rename to plot.x.tmp, move, and rename again 
     tmp_ext = '.x.tmp' 
     
     try:     
@@ -63,8 +62,8 @@ def copy_one_plot ( source, dest, num=99 ) :
 
 class JobPool():
     def __init__(self, number_of_workers):
-        self.in_progress = []   #list of source in copy
         self.usable = number_of_workers
+        self.size = number_of_workers
         self.q = queue.Queue(number_of_workers)
         self.active = True
         for i in range(number_of_workers):
@@ -77,20 +76,16 @@ class JobPool():
         #post job to queue
         self.q.put((source, dest))  
 
+    def getUsable(self):
+        return self.usable
+
     def size(self):
-        return self.q.qsize()
-
-    def empty(self):
-        return self.q.empty()
-
-    def full(self):
-        return self.q.full()
+        return self.size
 
     def stop(self):
         if self.active:
             self.active=False
             print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + '  Waiting..')               
-
             self.q.join()
             print(datetime.now().strftime("%m/%d/%Y, %H:%M:%S") + '  Joined..')               
     
@@ -101,11 +96,8 @@ class JobPool():
                 time.sleep(300) #we are expecting a long sleep
                 continue
 
-            #print(f'Thread {number} . started')
-            
             #pull from queue, run next job
             source, dest = self.q.get()
-            self.in_progress.append(source)
             print( datetime.now().strftime("%m/%d/%Y, %H:%M:%S")  + f' -- [{number}] Started {source} -> {dest} ')
             
             try:
@@ -113,12 +105,9 @@ class JobPool():
             except Exception as e: 
                 print(e)
 
-            self.in_progress.remove(source)
             print( datetime.now().strftime("%m/%d/%Y, %H:%M:%S")  + f' -- [{number}] Finished {source} -> {dest} ')
             self.q.task_done()
             
-    
-
 def exit_gracefully(signum, frame):
     global stopSignal
     global ctrl_c_press_num
@@ -128,7 +117,6 @@ def exit_gracefully(signum, frame):
     ctrl_c_press_num=ctrl_c_press_num+1
 
     stopSignal=True
-
     print(' please wait for threads to finish')
 
     if ctrl_c_press_num < 3 :
@@ -137,29 +125,18 @@ def exit_gracefully(signum, frame):
         #keep our handler
         signal.signal(signal.SIGINT, exit_gracefully)
 
-    # do not restore the exit gracefully handler here. two cntrl-c will take us out
-    #signal.signal(signal.SIGINT, exit_gracefully)
-
-
-
 def main( pool ):
-    global once
     global stopSignal
     global file_count
-    global in_progress
     global throttle
 
     diskUsage = {}
-
-    if once:
-        once=False
     jobs.clear()
 
     #no more jobs to be added
     if stopSignal:
         print('Time to Stop')
         return 
-
 
     if throttle % 40 == 0:
         print(f' -------------------------  ' )
@@ -180,13 +157,7 @@ def main( pool ):
 
     pool.setUsable(len(jobs))
 
-#    if throttle % 20 == 0:
-#        print('Available Destinations: %s ' % jobs)
-#        print('Destination : %s %s /%s /%s ' %  )
-
     throttle = throttle + 1
-    #print('Jobs running %s' % pool.size())
-
     #scan sources, create file list 
     for source in sources:
         for filename in glob.glob(source + "*." + ext):
@@ -197,9 +168,9 @@ def main( pool ):
             #print(f'starting {filename}')
             try:
                 destfilename = jobs[file_count % len(jobs)]
-
+                
+                #no doubles
                 if os.path.dirname not in jobs:
-    
                     pool.addJob( filename, destfilename)                
                 else:
                     print('skipped over %s', filename)
@@ -209,7 +180,6 @@ def main( pool ):
                 print("Shutil OS Error occurred while copying filename.")
             except Exception as e: 
                 print(e)
-
 
 
 
@@ -224,7 +194,7 @@ if __name__ == "__main__":
 
     job_predict = []
 
-    #fix this, awful hack to do this twice
+    #fix this, make rough guess on the nubmer of threads we really want
     for dest in destinations:
         total, used, free = shutil.disk_usage(dest)
         #only add det if it has enough space. 
@@ -233,15 +203,12 @@ if __name__ == "__main__":
             job_predict.append(dest)
 
     size = len(job_predict)
-    
     pool = JobPool( size )
-    print( size )
 
-    print('Started Buffer Process: ' + current_time,'  Num parallel: '+ str(size))
-    print('Press Ctrl+C To exit, File currently in process will complete before exit.')
+    print('Started Buffer Process: ' + current_time,' Max Num parallel: '+ str(size))
+    print('Press Ctrl+C 3x to exit, File currently in process will complete before exit.')
 
     #sys.exit(0)
-
     while True:
         if not stopSignal: 
             main(pool)
